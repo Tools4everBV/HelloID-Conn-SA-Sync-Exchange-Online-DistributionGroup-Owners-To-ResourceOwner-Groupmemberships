@@ -1,7 +1,7 @@
 #####################################################
 # HelloID-Conn-SA-Sync-EXO-DistributionGroup-Owners-To-ResourceOwner-Groupmemberships
 #
-# Version: 1.0.0
+# Version: 1.0.1
 #####################################################
 # Set to false to acutally perform actions - Only run as DryRun when testing/troubleshooting!
 $dryRun = $false
@@ -388,7 +388,7 @@ try {
             [void]$helloIDGroupsWithMembers.Add($helloIDGroup)
 
             if ($verboseLogging -eq $true) {
-                HID-Write-Status -Event Success "Successfully queried HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Result count: $(($helloIDGroup.users | Measure-Object).Count)"
+                Write-Verbose "Successfully queried HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Result count: $(($helloIDGroup.users | Measure-Object).Count)"
             }
         }
         catch {
@@ -445,7 +445,7 @@ try {
             $helloIDResourceOwnerGroup = $helloIDGroupsWithMembersGroupedBySourceAndName["$($resourceOwnerGroupName)"]
             if ($null -eq $helloIDResourceOwnerGroup) {
                 if ($verboseLogging -eq $true) {
-                    HID-Write-Status -Event Warning "Resource owner group [$($resourceOwnerGroupName)] for Distribution Group not found in HelloID"
+                    Write-Verbose "Resource owner group [$($resourceOwnerGroupName)] for Distribution Group not found in HelloID"
                 }
 
                 # Skip further actions for this record
@@ -454,7 +454,7 @@ try {
         }
         else {
             if ($verboseLogging -eq $true) {
-                HID-Write-Status -Event Warning "No Resource owner group name provided for Distribution Group"
+                Write-Verbose "No Resource owner group name provided for Distribution Group"
             }
         }
 
@@ -465,7 +465,7 @@ try {
             $helloIDUser = $helloIDUsersGroupedOnUserGUID["$($helloIDResourceOwnerGroupUser)"]
             if ($null -eq $helloIDUser) {
                 if ($verboseLogging -eq $true) {
-                    HID-Write-Status -Event Warning "No HelloID user found for Exchange User Resource owner group [$($helloIDResourceOwnerGroupUser)]"
+                    Write-Verbose "No HelloID user found for Exchange User Resource owner group [$($helloIDResourceOwnerGroupUser)]"
                 }
 
                 # Skip further actions for this record
@@ -495,7 +495,7 @@ try {
                 $helloIDUser = $helloIDUsersGroupedOnUserName["$($exoDBGroupOwnerFullUser.UserPrincipalName)"]
                 if ($null -eq $helloIDUser) {
                     if ($verboseLogging -eq $true) {
-                        HID-Write-Status -Event Warning "No HelloID user found for Exchange User [$($exoDBGroupOwnerFullUser.UserPrincipalName)]"
+                        Write-Verbose "No HelloID user found for Exchange User [$($exoDBGroupOwnerFullUser.UserPrincipalName)]"
                     }
 
                     # Skip further actions for this record
@@ -504,7 +504,7 @@ try {
             }
             else {
                 if ($verboseLogging -eq $true) {
-                    HID-Write-Status -Event Warning "No UserPrincipalName provided for full access user [$($exoDBGroupOwnerFullUser.Id)]"
+                    Write-Verbose "No UserPrincipalName provided for full access user [$($exoDBGroupOwnerFullUser.Id)]"
                 }
             }
 
@@ -566,7 +566,7 @@ try {
         # Add HelloID User to HelloID Group
         try {
             if ($verboseLogging -eq $true) {
-                HID-Write-Status -Event Information "Adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
+                Write-Verbose "Adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
             }
 
             if($($newGroupMembership.UserId) -ne ""){
@@ -585,12 +585,12 @@ try {
                     $addUserToGroupSuccess++
     
                     if ($verboseLogging -eq $true) {
-                        HID-Write-Status -Event Success "Successfully added HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
+                        Write-Verbose "Successfully added HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
                     }
                 }
                 else {
                     if ($verboseLogging -eq $true) {
-                        HID-Write-Status -Event Warning "DryRun: Would add HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
+                        Write-Verbose "DryRun: Would add HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
                     }
                 }
                 
@@ -629,7 +629,7 @@ try {
             # Remove HelloID User from HelloID Group
             try {
                 if ($verboseLogging -eq $true) {
-                    HID-Write-Status -Event Information "Removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
+                    Write-Verbose "Removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
                 }
 
                 $splatWebRequest = @{
@@ -642,12 +642,12 @@ try {
                     $removeUserFromGroupSuccess++
 
                     if ($verboseLogging -eq $true) {
-                        HID-Write-Status -Event Success "Successfully removed HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
+                        Write-Verbose "Successfully removed HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
                     }
                 }
                 else {
                     if ($verboseLogging -eq $true) {
-                        HID-Write-Status -Event Warning "DryRun: Would remove HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
+                        Write-Verbose "DryRun: Would remove HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
                     }
                 }
             }
