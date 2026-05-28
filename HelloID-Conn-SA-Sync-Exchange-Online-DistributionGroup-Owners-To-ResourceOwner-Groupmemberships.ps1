@@ -1,9 +1,9 @@
 #####################################################
 # HelloID-Conn-SA-Sync-EXO-DistributionGroup-Owners-To-ResourceOwner-Groupmemberships
 #
-# Version: 1.0.1
+# Version: 1.1.1
 #####################################################
-# Set to false to acutally perform actions - Only run as DryRun when testing/troubleshooting!
+# Set to false to actually perform actions - Only run as DryRun when testing/troubleshooting!
 $dryRun = $false
 # Set to true to log each individual action - May cause lots of logging, so use with cause, Only run testing/troubleshooting!
 $verboseLogging = $false
@@ -24,13 +24,14 @@ $WarningPreference = "Continue"
 #$portalApiKey = "" # Set from Global Variable
 #$portalApiSecret = "" # Set from Global Variable
 
-# Exchange Online Connection Configuration
-#$EntraOrganization = '' # Set from Global Variable
-#$EntraTenantID = '' # Set from Global Variable
-#$EntraAppID = ''# Set from Global Variable
-#$EntraAppSecret = '' # Set from Global Variable
+# Exchange Online connection (required)
+# $EntraIdOrganization = "" # Set from Global Variable
+# $EntraIdAppId = "" # Set from Global Variable
+# $EntraIdCertificateBase64String = "" # Set from Global Variable
+# $EntraIdCertificatePassword = "" # Set from Global Variable
  
-$exchangeGroupsFilter = "(DisplayName -like '*X*')"
+$exchangeGroupsFilter = "DisplayName -like 'DistributionGroup*'" # Optional, when no filter is provided ($exchangeGroupsFilter = $null), all groups will be queried
+
 # PowerShell commands to import
 $commands = @(
     "Get-User"
@@ -206,6 +207,29 @@ function Invoke-HIDRestmethod {
         throw $_
     }
 }
+
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
 #endregion functions
 
 #region script
@@ -228,37 +252,29 @@ catch {
 
 # Connect to Exchange
 try {
-    # Create access token
-    Write-Verbose "Creating Access Token"
+    # Convert base64 certificate string to certificate object
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
 
-    $baseUri = "https://login.microsoftonline.com/"
-    $authUri = $baseUri + "$EntraTenantID/oauth2/token"
-    
-    $body = @{
-        grant_type    = "client_credentials"
-        client_id     = "$EntraAppID"
-        client_secret = "$EntraAppSecret"
-        resource      = "https://outlook.office365.com"
+    Write-Verbose "Converted base64 certificate string to certificate object"
+
+    # Connect to Microsoft Exchange Online
+    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
+
+    $createExchangeSessionSplatParams = @{
+        Organization          = $EntraIdOrganization
+        AppID                 = $EntraIdAppId
+        Certificate           = $certificate
+        CommandName           = $commands
+        ShowBanner            = $false
+        ShowProgress          = $false
+        TrackPerformance      = $false
+        SkipLoadingCmdletHelp = $true
+        SkipLoadingFormatData = $true
+        ErrorAction           = "Stop"
     }
-    
-    $Response = Invoke-RestMethod -Method POST -Uri $authUri -Body $body -ContentType "application/x-www-form-urlencoded" -UseBasicParsing:$true -Verbose:$false
-    $accessToken = $Response.access_token
 
-    # Connect to Exchange Online in an unattended scripting scenario using an access token.
-    Write-Verbose "Connecting to Exchange Online"
-
-    $exchangeSessionParams = @{
-        Organization     = $EntraOrganization
-        AppID            = $EntraAppID
-        AccessToken      = $accessToken
-        CommandName      = $exchangeOnlineCommands
-        ShowBanner       = $false
-        ShowProgress     = $false
-        TrackPerformance = $false
-        ErrorAction      = "Stop"
-    }
-    $exchangeSession = Connect-ExchangeOnline @exchangeSessionParams -Verbose:$false
-    
+    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
+  
     Write-Information "Successfully connected to Exchange Online"
 }
 catch {
@@ -272,10 +288,10 @@ catch {
 # Get Exchange Online Distribution groups
 try {  
     $exchangeQuerySplatParams = @{
-        Filter               = $exchangeGroupsFilter
-        ResultSize           = "Unlimited"
-        Verbose              = $false
-        ErrorAction          = "Stop"
+        Filter      = $exchangeGroupsFilter
+        ResultSize  = "Unlimited"
+        Verbose     = $false
+        ErrorAction = "Stop"
     }
 
     HID-Write-Status -Event Information -Message "Querying Exchange Online Distribution Groups that match filter [$($exchangeQuerySplatParams.Filter)]"
@@ -307,7 +323,7 @@ try {
         throw "No Users have been found"
     }
 
-    $exoUsersGroupedOnDisplayName = $exoUsers | Group-Object DisplayName -AsHashTable 
+    $exoUsersGroupedOnId = $exoUsers | Group-Object Id -AsHashTable
     HID-Write-Status -Event Success -Message "Successfully queried Exchange Online Users. Result count: $(($exoUsers | Measure-Object).Count)"
 }
 catch { 
@@ -489,7 +505,7 @@ try {
             $helloIDUser = $null
             $exoDBGroupOwnerFullUser = "" 
 
-            $exoDBGroupOwnerFullUser = $exoUsersGroupedOnDisplayName["$exoDBGroupOwner"]
+            $exoDBGroupOwnerFullUser = $exoUsersGroupedOnId["$exoDBGroupOwner"]
 
             if (-not[string]::IsNullOrEmpty($exoDBGroupOwnerFullUser.UserPrincipalName)) {
                 $helloIDUser = $helloIDUsersGroupedOnUserName["$($exoDBGroupOwnerFullUser.UserPrincipalName)"]
@@ -521,15 +537,15 @@ try {
 
     # Define new groupmemberships
     $newGroupMemberships = [System.Collections.ArrayList]@()
-    $newGroupMemberships = $newGroupMembershipObjects | Where-Object { $_ -notin $existingGroupMembershipObjects }
+    $newGroupMemberships = $newGroupMembershipObjects | Where-Object { $_.UserId -notin $existingGroupMembershipObjects.UserId }
 
     # Define obsolete groupmemberships
     $obsoleteGroupMemberships = [System.Collections.ArrayList]@()
-    $obsoleteGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_ -notin $newGroupMembershipObjects }
+    $obsoleteGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.UserId -notin $newGroupMembershipObjects.UserId }
 
     # Define existing groupmemberships
     $existingGroupMemberships = [System.Collections.ArrayList]@()
-    $existingGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_ -notin $obsoleteGroupMemberships }
+    $existingGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.UserId -notin $obsoleteGroupMemberships.UserId }
 
     # Define total groupmemberships (existing + new)
     $totalGroupMemberships = ($(($existingGroupMemberships | Measure-Object).Count) + $(($newGroupMemberships | Measure-Object).Count))
@@ -569,7 +585,7 @@ try {
                 Write-Verbose "Adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
             }
 
-            if($($newGroupMembership.UserId) -ne ""){
+            if ($($newGroupMembership.UserId) -ne "") {
                 $addUserToGroupBody = [PSCustomObject]@{
                     UserGUID = "$($newGroupMembership.UserId)"
                 }
@@ -594,8 +610,9 @@ try {
                     }
                 }
                 
-            } else {
-                HID-Write-Status -Event Warning "Adding user to Resource group failed, because user was not found. [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))] "
+            }
+            else {
+                HID-Write-Status -Event Warning -Message "Adding user [$($newGroupMembership)] to Resource group failed, because user was not found. [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))] "
                 $addUserToGroupError++
             }
             
@@ -619,7 +636,7 @@ try {
     }
     else {
         HID-Write-Status -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
-        HID-Write-Status -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        HID-Write-Summary -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
     }
 
     if ($removeMembers -eq $true) {
