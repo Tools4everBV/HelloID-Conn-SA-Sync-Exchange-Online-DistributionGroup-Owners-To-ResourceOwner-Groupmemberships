@@ -1,7 +1,7 @@
 #####################################################
 # HelloID-Conn-SA-Sync-EXO-DistributionGroup-Owners-To-ResourceOwner-Groupmemberships
 #
-# Version: 1.1.1
+# Version: 1.1.0
 #####################################################
 # Set to false to actually perform actions - Only run as DryRun when testing/troubleshooting!
 $dryRun = $false
@@ -19,10 +19,10 @@ $WarningPreference = "Continue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
 
 # Make sure to create the Global variables defined below in HelloID
-#HelloID Connection Configuration
-#$script:PortalBaseUrl = "" # Set from Global Variable
-#$portalApiKey = "" # Set from Global Variable
-#$portalApiSecret = "" # Set from Global Variable
+# HelloID API connection (required)
+# $helloIDPortalBaseUrl = $portalBaseUrl # When running from HelloID, set from default Global Variable
+# $helloIDPortalApiKey = $portalApiKey # When running from HelloID, set from default Global Variable
+# $helloIDPortalApiSecret = $portalApiSecret # When running from HelloID, set from default Global Variable
 
 # Exchange Online connection (required)
 # $EntraIdOrganization = "" # Set from Global Variable
@@ -42,10 +42,81 @@ $commands = @(
 $resourceOwnerGroupSource = "Local" # Specify the source of the groups - if source is any other than "Local", the sync of the target system itself might overwrite the memberships set form this sync
 # The HelloID Resource owner group will be queried based on the distribution group name and the specified prefix and suffix
 $resourceOwnerGroupPrefix = "" # Specify prefix to recognize the resource owner group
-$resourceOwnerGroupSuffix = " - Owner" # Specify suffix to recognize the resource owner group
-$removeMembers = $false # If true, existing members will be removed if they no longer have full access to the corresponding mailbox - This will overwrite manual added users
+$resourceOwnerGroupSuffix = " Resource Owner" # Specify suffix to recognize the resource owner group
+$removeMembers = $true # If true, existing members will be removed if they no longer have full access to the corresponding mailbox - This will overwrite manual added users
 
 #region functions
+function Write-StatusMessage {
+    <#
+    .SYNOPSIS
+    Writes a status message to the appropriate logging system.
+    
+    .DESCRIPTION
+    When running locally: Uses native PowerShell cmdlets (Write-Information, Write-Warning, Write-Error)
+    When running in HelloID: Uses HelloID's native Hid-Write-Status function
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Message,
+
+        [Parameter(Mandatory = $true)]
+        [String]
+        $Event
+    )
+    
+    if ($null -eq $portalBaseUrl) {
+        # Running locally - use native PowerShell cmdlets
+        switch ($Event) {
+            "Information" { Write-Information ($Message) -InformationAction Continue }
+            "Warning" { Write-Warning ($Message) -WarningAction Continue }
+            "Success" { Write-Information ($Message) -InformationAction Continue }
+            "Error" { Write-Error ($Message) -ErrorAction Continue }
+            "Critical" { Write-Error ($Message) -ErrorAction Continue }
+            "Failed" { Write-Error ($Message) -ErrorAction Continue }
+        }
+    }
+    else {
+        # Running in HelloID - use native HelloID function
+        Hid-Write-Status -Message $Message -Event $Event
+    }
+}
+
+function Write-SummaryMessage {
+    <#
+    .SYNOPSIS
+    Writes a summary message to the appropriate logging system.
+    
+    .DESCRIPTION
+    When running locally: Uses native PowerShell cmdlets (Write-Information, Write-Warning, Write-Error)
+    When running in HelloID: Uses HelloID's native Hid-Write-Summary function
+    #>
+    [cmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Message,
+
+        [Parameter(Mandatory = $true)]
+        [String]
+        $Event
+    )
+    
+    if ($null -eq $portalBaseUrl) {
+        # Running locally - use native PowerShell cmdlets
+        switch ($Event) {
+            "Information" { Write-Information ($Message) -InformationAction Continue }
+            "Warning" { Write-Warning ($Message) -WarningAction Continue }
+            "Success" { Write-Information ($Message) -InformationAction Continue }
+            "Error" { Write-Error ($Message) -ErrorAction Continue }
+            "Critical" { Write-Error ($Message) -ErrorAction Continue }
+            "Failed" { Write-Error ($Message) -ErrorAction Continue }
+        }
+    }
+    else {
+        # Running in HelloID - use native HelloID function
+        Hid-Write-Summary -Message $Message -Event $Event
+    }
+}
 
 function Remove-StringLatinCharacters {
     PARAM ([string]$String)
@@ -144,7 +215,7 @@ function Invoke-HIDRestmethod {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
         Write-Verbose "Setting authorization headers"
-        $apiKeySecret = "$($portalApiKey):$($portalApiSecret)"
+        $apiKeySecret = "$($helloIDPortalApiKey):$($helloIDPortalApiSecret)"
         $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($apiKeySecret))
         $headers = [System.Collections.Generic.Dictionary[[String], [String]]]::new()
         $headers.Add("Authorization", "Basic $base64")
@@ -152,7 +223,7 @@ function Invoke-HIDRestmethod {
         $headers.Add("Accept", $ContentType)
 
         $splatWebRequest = @{
-            Uri             = "$($script:PortalBaseUrl)/api/v1/$($Uri)"
+            Uri             = "$($helloIDPortalBaseUrl)/api/v1/$($Uri)"
             Headers         = $headers
             Method          = $Method
             UseBasicParsing = $true
@@ -165,7 +236,7 @@ function Invoke-HIDRestmethod {
             $skip = 0
             $take = $PageSize
             Do {
-                $splatWebRequest["Uri"] = "$($script:PortalBaseUrl)/api/v1/$($Uri)?skip=$($skip)&take=$($take)"
+                $splatWebRequest["Uri"] = "$($helloIDPortalBaseUrl)/api/v1/$($Uri)?skip=$($skip)&take=$($take)"
 
                 Write-Verbose "Invoking [$Method] request to [$Uri]"
                 $response = $null
@@ -233,33 +304,28 @@ function Get-MSEntraCertificate {
 #endregion functions
 
 #region script
-HID-Write-Status -Event Information -Message "Starting synchronization of Exchange Online Distribution Group Owners to Distributiongroup to HelloID ResourceOwner Groupmemberships"
-HID-Write-Status -Event Information -Message "------[Exchange Online]-----------"
+Write-StatusMessage -Event Information -Message "Starting synchronization of Exchange Online Distribution Group Owners to Distributiongroup to HelloID ResourceOwner Groupmemberships"
+Write-StatusMessage -Event Information -Message "------[Exchange Online]-----------"
 
 # Import module
-try {
-    $moduleName = "ExchangeOnlineManagement"
-    $importModule = Import-Module -Name $moduleName -ErrorAction Stop -Verbose:$false
-}
-catch {
-    $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
+try {    
+    $actionMessage = "importing module [ExchangeOnlineManagement]"
+    $importModuleSplatParams = @{
+        Name        = "ExchangeOnlineManagement"
+        Cmdlet      = $commands
+        Verbose     = $false
+        ErrorAction = "Stop"
+    }
+    $null = Import-Module @importModuleSplatParams
 
-    Write-Verbose "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error importing module [$moduleName]. Error Message: $($errorMessage.AuditErrorMessage)"
-}
-
-# Connect to Exchange
-try {
-    # Convert base64 certificate string to certificate object
+    #region Retrieving certificate
+    $actionMessage = "retrieving certificate"
     $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
-
-    Write-Verbose "Converted base64 certificate string to certificate object"
-
-    # Connect to Microsoft Exchange Online
+    #endregion Retrieving certificate
+    
+    #region Connect to Microsoft Exchange Online
     # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
-
+    $actionMessage = "connecting to Microsoft Exchange Online"
     $createExchangeSessionSplatParams = @{
         Organization          = $EntraIdOrganization
         AppID                 = $EntraIdAppId
@@ -272,17 +338,22 @@ try {
         SkipLoadingFormatData = $true
         ErrorAction           = "Stop"
     }
-
     $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
-  
-    Write-Information "Successfully connected to Exchange Online"
-}
+    Write-Information "Connected to Microsoft Exchange Online"
+} 
 catch {
     $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
-
-    Write-Verbose "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($errorMessage.VerboseErrorMessage)"
-    throw "Error connecting to Exchange Online. Error Message: $($errorMessage.AuditErrorMessage)"
+    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
+    }
+    else {
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+    }
+    Write-StatusMessage -Event Error -Message $warningMessage
+    Write-StatusMessage -Event Error -Message $auditMessage
+    throw $auditMessage
 }
 
 # Get Exchange Online Distribution groups
@@ -294,20 +365,20 @@ try {
         ErrorAction = "Stop"
     }
 
-    HID-Write-Status -Event Information -Message "Querying Exchange Online Distribution Groups that match filter [$($exchangeQuerySplatParams.Filter)]"
+    Write-StatusMessage -Event Information -Message "Querying Exchange Online Distribution Groups that match filter [$($exchangeQuerySplatParams.Filter)]"
     $exoDBGroups = Get-DistributionGroup @exchangeQuerySplatParams
 
     if (($exoDBGroups | Measure-Object).Count -eq 0) {
         throw "No Distribution groups have been found"
     }
 
-    HID-Write-Status -Event Success -Message "Successfully queried Exchange Online Distribution Groups. Result count: $(($exoDBGroups | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried Exchange Online Distribution Groups. Result count: $(($exoDBGroups | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
 
     throw "Error querying Exchange Online DistributionGroups that match filter [$($exchangeQuerySplatParams.Filter)]. Error Message: $($errorMessage.AuditErrorMessage)"
 }
@@ -324,18 +395,18 @@ try {
     }
 
     $exoUsersGroupedOnId = $exoUsers | Group-Object Id -AsHashTable
-    HID-Write-Status -Event Success -Message "Successfully queried Exchange Online Users. Result count: $(($exoUsers | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried Exchange Online Users. Result count: $(($exoUsers | Measure-Object).Count)"
 }
 catch { 
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
     throw "Error querying all Exchange users. Error Message: $($errorMessage.AuditErrorMessage)"
 }
 #endregion Get Exchange online groups
 
-HID-Write-Status -Event Information -Message "------[HelloID]------"
+Write-StatusMessage -Event Information -Message "------[HelloID]------"
 #region Get HelloID Users
 try {
     Write-Verbose "Querying Users from HelloID"
@@ -350,13 +421,13 @@ try {
     $helloIDUsersGroupedOnUserName = $helloIDUsers | Group-Object -Property "userName" -AsHashTable -AsString
     $helloIDUsersGroupedOnUserGUID = $helloIDUsers | Group-Object -Property "userGUID" -AsHashTable -AsString
 
-    HID-Write-Status -Event Success -Message "Successfully queried Users from HelloID. Result count: $(($helloIDUsers | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried Users from HelloID. Result count: $(($helloIDUsers | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
 
     throw "Error querying Users from HelloID. Error Message: $($errorMessage.AuditErrorMessage)"
 }
@@ -373,13 +444,17 @@ try {
     }
     $helloIDGroups = Invoke-HIDRestMethod @splatWebRequest
 
-    HID-Write-Status -Event Success -Message "Successfully queried Groups from HelloID. Result count: $(($helloIDGroups | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried Groups from HelloID. Result count: $(($helloIDGroups | Measure-Object).Count)"
+
+    $helloIDGroups = $helloIDGroups | Where-Object { $_.source -eq $resourceOwnerGroupSource -and $_.name -like "$resourceOwnerGroupPrefix*$resourceOwnerGroupSuffix" }
+    
+    Write-StatusMessage -Event Success -Message "Successfully queried Groups from HelloID. Result count after filtering [source] = [$resourceOwnerGroupSource] and [name] = [$($resourceOwnerGroupPrefix)*$($resourceOwnerGroupSuffix)]: $(($helloIDGroups | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
 
     throw "Error querying Groups from HelloID. Error Message: $($errorMessage.AuditErrorMessage)"
 }
@@ -411,7 +486,7 @@ try {
             $ex = $PSItem
             $errorMessage = Get-ErrorMessage -ErrorObject $ex
         
-            HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+            Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
         
             throw "Error querying HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Error Message: $($errorMessage.AuditErrorMessage)"
         }
@@ -430,19 +505,19 @@ try {
 
     $helloIDGroupsWithMembersGroupedBySourceAndName = $helloIDGroupsWithMembers | Group-Object -Property "SourceAndName" -AsHashTable -AsString
 
-    HID-Write-Status -Event Success -Message "Successfully queried HelloID groups with members. Result count: $(($helloIDGroupsWithMembers.users | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried HelloID groups with members. Result count: $(($helloIDGroupsWithMembers.users | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
 
     throw "Error querying HelloID users that are member of HelloID groups. Error Message: $($errorMessage.AuditErrorMessage)"
 }
 #endregionGet members of HelloID groups
 
-HID-Write-Status -Event Information -Message "------[Calculations of combined data]------"
+Write-StatusMessage -Event Information -Message "------[Calculations of combined data]------"
 # Calculate new and obsolete groupmemberships
 try {
     # Define existing & new groupmemberships
@@ -535,17 +610,23 @@ try {
         }
     }
 
-    # Define new groupmemberships
+    $existingGroupMembershipObjects | Add-Member -MemberType NoteProperty -Name MembershipKey -Value $null -Force
+    $existingGroupMembershipObjects | ForEach-Object { $_.MembershipKey = "$($_.GroupId)|$($_.UserId)" }
+
+    $newGroupMembershipObjects | Add-Member -MemberType NoteProperty -Name MembershipKey -Value $null -Force
+    $newGroupMembershipObjects | ForEach-Object { $_.MembershipKey = "$($_.GroupId)|$($_.UserId)" }
+
+    # Define new group memberships
     $newGroupMemberships = [System.Collections.ArrayList]@()
-    $newGroupMemberships = $newGroupMembershipObjects | Where-Object { $_.UserId -notin $existingGroupMembershipObjects.UserId }
+    $newGroupMemberships = $newGroupMembershipObjects | Where-Object { $_.MembershipKey -notin $existingGroupMembershipObjects.MembershipKey }
 
-    # Define obsolete groupmemberships
+    # Define obsolete group memberships
     $obsoleteGroupMemberships = [System.Collections.ArrayList]@()
-    $obsoleteGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.UserId -notin $newGroupMembershipObjects.UserId }
+    $obsoleteGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.MembershipKey -notin $newGroupMembershipObjects.MembershipKey }
 
-    # Define existing groupmemberships
+    # Define existing group memberships
     $existingGroupMemberships = [System.Collections.ArrayList]@()
-    $existingGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.UserId -notin $obsoleteGroupMemberships.UserId }
+    $existingGroupMemberships = $existingGroupMembershipObjects | Where-Object { $_.MembershipKey -in $newGroupMembershipObjects.MembershipKey }
 
     # Define total groupmemberships (existing + new)
     $totalGroupMemberships = ($(($existingGroupMemberships | Measure-Object).Count) + $(($newGroupMemberships | Measure-Object).Count))
@@ -554,25 +635,25 @@ catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
 
-    HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
 
     throw "Error calculating new and obsolete groupmemberships. Error Message: $($errorMessage.AuditErrorMessage)"
 }
 
 
-HID-Write-Status -Event Information -Message "------[Summary]------"
+Write-StatusMessage -Event Information -Message "------[Summary]------"
 
-HID-Write-Status -Event Information -Message "New HelloID Resource Owner Groupmembership(s) that will be granted [$(($newGroupMemberships | Measure-Object).Count)]"
+Write-StatusMessage -Event Information -Message "New HelloID Resource Owner Groupmembership(s) that will be granted [$(($newGroupMemberships | Measure-Object).Count)]"
 
 if ($removeMembers) {
-    HID-Write-Status -Event Information "Obsolete HelloID Resource Owner Groupmembership(s) that will be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
+    Write-StatusMessage -Event Information "Obsolete HelloID Resource Owner Groupmembership(s) that will be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
 }
 else {
-    HID-Write-Status -Event Information -Message "Obsolete HelloID Resource Owner Groupmembership(s) that won't be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
+    Write-StatusMessage -Event Information -Message "Obsolete HelloID Resource Owner Groupmembership(s) that won't be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
 }
 
 
-HID-Write-Status -Event Information -Message "------[Processing]------------------"
+Write-StatusMessage -Event Information -Message "------[Processing]------------------"
 
 
 try {
@@ -612,7 +693,7 @@ try {
                 
             }
             else {
-                HID-Write-Status -Event Warning -Message "Adding user [$($newGroupMembership)] to Resource group failed, because user was not found. [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))] "
+                Write-StatusMessage -Event Warning -Message "Adding user [$($newGroupMembership)] to Resource group failed, because user was not found. [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))] "
                 $addUserToGroupError++
             }
             
@@ -623,20 +704,20 @@ try {
             $ex = $PSItem
             $errorMessage = Get-ErrorMessage -ErrorObject $ex
             
-            HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+            Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
             
             throw "Error adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]. Error Message: $($errorMessage.AuditErrorMessage)"
         }
     }
     if ($dryRun -eq $false) {
         if ($addUserToGroupSuccess -ge 1 -or $addUserToGroupError -ge 1) {
-            HID-Write-Status -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
-            HID-Write-Summary -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
+            Write-StatusMessage -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
+            Write-SummaryMessage -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
         }
     }
     else {
-        HID-Write-Status -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
-        HID-Write-Summary -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        Write-StatusMessage -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        Write-SummaryMessage -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
     }
 
     if ($removeMembers -eq $true) {
@@ -674,41 +755,41 @@ try {
                 $ex = $PSItem
                 $errorMessage = Get-ErrorMessage -ErrorObject $ex
             
-                HID-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+                Write-StatusMessage -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
             
                 throw "Error removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]. Error Message: $($errorMessage.AuditErrorMessage)"
             }
         }
         if ($dryRun -eq $false) {
             if ($removeUserFromGroupSuccess -ge 1 -or $removeUserFromGroupError -ge 1) {
-                HID-Write-Status -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
-                HID-Write-Summary -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
+                Write-StatusMessage -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
+                Write-SummaryMessage -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
             }
         }
         else {
-            HID-Write-Status -Event Warning -Message "DryRun: Would remove [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users from HelloID groups"
-            HID-Write-Status -Event Warning -Message "DryRun: Would remove [$(($obsoleteProducts | Measure-Object).Count)] HelloID users from HelloID groups"
+            Write-StatusMessage -Event Warning -Message "DryRun: Would remove [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users from HelloID groups"
+            Write-StatusMessage -Event Warning -Message "DryRun: Would remove [$(($obsoleteProducts | Measure-Object).Count)] HelloID users from HelloID groups"
         }
     }
     else {
-        HID-Write-Status -Event Warning -Message "Option to remove members is set to [$removeMembers]. Skipped removing [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        Write-StatusMessage -Event Warning -Message "Option to remove members is set to [$removeMembers]. Skipped removing [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
     }
 
     if ($dryRun -eq $false) {
-        HID-Write-Status -Event Success -Message "Successfully synchronized [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-        HID-Write-Summary -Event Success -Message "Successfully synchronized [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-StatusMessage -Event Success -Message "Successfully synchronized [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-SummaryMessage -Event Success -Message "Successfully synchronized [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
     }
     else {
-        HID-Write-Status -Event Success -Message "DryRun: Would synchronize [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-        HID-Write-Summary -Event Success -Message "DryRun: Would synchronize [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-StatusMessage -Event Success -Message "DryRun: Would synchronize [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-SummaryMessage -Event Success -Message "DryRun: Would synchronize [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
     }
 }
 catch {
-    HID-Write-Status -Event Error -Message "Error synchronization of [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-    HID-Write-Status -Event Error -Message "Error at Line [$($_.InvocationInfo.ScriptLineNumber)]: $($_.InvocationInfo.Line)."
-    HID-Write-Status -Event Error -Message "Exception message: $($_.Exception.Message)"
-    HID-Write-Status -Event Error -Message "Exception details: $($_.errordetails)"
-    HID-Write-Summary -Event Failed -Message "Error synchronization of [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+    Write-StatusMessage -Event Error -Message "Error synchronization of [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+    Write-StatusMessage -Event Error -Message "Error at Line [$($_.InvocationInfo.ScriptLineNumber)]: $($_.InvocationInfo.Line)."
+    Write-StatusMessage -Event Error -Message "Exception message: $($_.Exception.Message)"
+    Write-StatusMessage -Event Error -Message "Exception details: $($_.errordetails)"
+    Write-SummaryMessage -Event Failed -Message "Error synchronization of [$(($newGroupMemberships | Measure-Object).Count)] Exchange Online DB Group Owners to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
 }
 
 #endregion
